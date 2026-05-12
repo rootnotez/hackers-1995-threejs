@@ -1,32 +1,53 @@
-# Hackers (1995) - Animated Experience
+# Hackers 1995 — Flythrough
 
-An immersive 3D web experience inspired by the city mainframe sequence from the 1995 movie "Hackers". Built with Three.js, custom shaders, and serverless infrastructure.
+Stripped-down fork of David Vidovic's [Hackers (1995) Three.js scene](https://davidvidovic.com), repurposed as a scriptable camera flythrough. The original game (leaderboard, music, intro UI, controls, Vercel backend) lives on the `main` branch; this branch keeps only the scene and a waypoint-driven camera.
 
-## Features
-- **Procedural City Generation**: Infinite-looking data structures with neon aesthetics.
-- **Custom Shaders**: Matrix-style text rain, glowing circuit floors, and retro plasma effects.
-- **Global Leaderboard**: Race to find the hidden "Garbage File" and immortalize your alias in the mainframe.
-- **Interactive Controls**: Fly through the mainframe using WASD (Desktop) or Virtual Joystick (Mobile).
-- **"Garbage File" Secret**: Locate the corrupted data column to trigger the legendary extraction sequence.
-- **Cyberpunk Audio**: Integrated Music Player featuring the original OST and an extended mix by @josesaezmerino.
+Three.js loads from [esm.sh](https://esm.sh) via an importmap — no build step, no Node, no npm.
 
-## Controls
-### Desktop
-- **W, A, S, D**: Move
-- **Q, E**: Rotate View
-- **SPACE**: Fly Up
-- **SHIFT**: Fly Down
-- **Mouse**: Look Around / Interact
+## Run locally with podman
 
-### Mobile
-- **Left Joystick**: Move
-- **Right Hand**: Touch & Drag to Look
-- **Two Fingers**: Fly Up/Down
+### Quick (no image build)
 
-## Author
-**David Vidovic** - [davidvidovic.com](https://davidvidovic.com)
+```bash
+podman run --rm -p 8080:80 -v "$PWD":/usr/share/nginx/html:z nginx:alpine
+```
 
-## Tech Stack
-- **Frontend**: Three.js, Vite, GLSL Shaders
-- **Backend**: Vercel Serverless Functions (Node.js)
-- **Database**: Turso (LibSQL)
+Open <http://localhost:8080>.
+
+### From the Containerfile
+
+```bash
+podman build -t hackers-flythrough .
+podman run --rm --name hackers-flythrough -p 8080:80 hackers-flythrough
+```
+
+Stop with `Ctrl-C` or `podman stop hackers-flythrough`.
+
+## Deploy to GitHub Pages
+
+No workflow needed. In the repo settings under **Pages**, set the source to **Deploy from a branch**, select the `flythrough` branch, and root (`/`). GitHub will serve the static files directly.
+
+Live at: <https://rootnotez.github.io/hackers-1995-threejs/>
+
+## Authoring the flythrough
+
+Camera waypoints live in [`src/flythrough.js`](src/flythrough.js). Each entry is `{ pos: [x,y,z], look: [x,y,z], duration, ease? }`; `duration` is seconds spent traveling *from* the previous waypoint *to* this one.
+
+To author waypoints interactively, open <http://localhost:8080/?debug> for a free-fly mode:
+
+- `WASD` — move
+- `Q` / `E` — yaw
+- `Space` / `Ctrl` — up / down
+- `Shift` — fast move
+- mouse-drag — look around
+- `P` — log a waypoint with the current pose to the browser console
+
+Paste logged waypoints into `src/flythrough.js`.
+
+## Scene reference
+
+The city floor is roughly 1300 × 660 units (X × Z), centered at the origin. Buildings are 15 units tall on a 16-unit grid. `Y=2` is street level; `Y≥300` is overhead. Bloom (`CONFIG.bloom` in `src/main.js`) is tuned for those distances — retune if your waypoints sit much higher or lower.
+
+## Credits
+
+Original scene by **David Vidovic** — [davidvidovic.com](https://davidvidovic.com).
