@@ -5,10 +5,45 @@ import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPa
 import { createDataTexture, DataFlowShader } from "./DataTexture.js";
 import { createCircuitTexture, FloorShader } from "./CircuitTexture.js";
 import { createGarbageTexture, GarbageShader } from "./GarbageTexture.js";
-import { FLYTHROUGH, LOOP_FLYTHROUGH } from "./flythrough.js";
+import {
+  FLYTHROUGH,
+  LOOP_FLYTHROUGH,
+  SPLINE_FLYTHROUGH,
+} from "./flythrough.js";
+import { DEFAULT_FOV } from "./path.js";
+import { Player, transportKey } from "./playback.js";
+import { initDebug } from "./debug.js";
 
-// Toggle with `?debug` in the URL to enable free-fly authoring mode.
-const DEBUG = new URLSearchParams(location.search).has("debug");
+// --- URL Parameters ---
+//   ?debug          free-fly authoring mode
+//   ?speed=0.5      playback speed multiplier
+//   ?start=3        begin at waypoint 3      ?t=12.5  begin 12.5s in
+//   ?paused         start paused
+//   ?loop=0         override LOOP_FLYTHROUGH  ?spline=0  override SPLINE_FLYTHROUGH
+//   ?seed=42        deterministic scene (pillar colors, garbage column, textures)
+const params = new URLSearchParams(location.search);
+const DEBUG = params.has("debug");
+const flag = (name, fallback) =>
+  params.has(name)
+    ? !["0", "false", "no", "off"].includes(params.get(name).toLowerCase())
+    : fallback;
+
+// Replace Math.random with a seeded PRNG (mulberry32) before any scene
+// generation runs, so the same seed always builds the same city.
+if (params.has("seed")) {
+  let h = 1779033703;
+  for (const ch of params.get("seed")) {
+    h = Math.imul(h ^ ch.charCodeAt(0), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  let a = h >>> 0;
+  Math.random = () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 // --- Configuration ---
 const CONFIG = {
@@ -32,7 +67,7 @@ scene.background = new THREE.Color(CONFIG.colors.background);
 scene.fog = new THREE.FogExp2(CONFIG.colors.background, 0.002);
 
 const camera = new THREE.PerspectiveCamera(
-  75,
+  DEFAULT_FOV,
   window.innerWidth / window.innerHeight,
   0.1,
   1000,
@@ -254,153 +289,40 @@ window.addEventListener("resize", () => {
   composer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// --- Flythrough Driver ---
-// Each waypoint: { pos: [x,y,z], look: [x,y,z], duration: seconds, ease?: fn }
-// duration on a waypoint = time spent traveling FROM the previous waypoint TO this one.
-// The first waypoint's duration is ignored (it's the starting pose).
-const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
+// --- Flythrough Player ---
+const player = new Player(camera, {
+  loop: flag("loop", LOOP_FLYTHROUGH),
+  spline: flag("spline", SPLINE_FLYTHROUGH),
+});
+// Debug mode edits a copy so the imported list stays pristine.
+const waypoints = DEBUG ? FLYTHROUGH.map((wp) => ({ ...wp })) : FLYTHROUGH;
+player.setWaypoints(waypoints);
+player.speed = Number(params.get("speed")) || 1;
+player.paused = flag("paused", false);
+if (params.has("start")) player.seekWaypoint(Number(params.get("start")) || 0);
+if (params.has("t")) player.time = Number(params.get("t")) || 0;
 
-function applyWaypoint(wp) {
-  camera.position.set(wp.pos[0], wp.pos[1], wp.pos[2]);
-  camera.lookAt(wp.look[0], wp.look[1], wp.look[2]);
-}
+const debugMode = DEBUG
+  ? initDebug({ camera, scene, renderer, player, waypoints })
+  : null;
 
-function lerpWaypoint(a, b, t, ease) {
-  const e = (ease || easeOutCubic)(t);
-  camera.position.set(
-    a.pos[0] + (b.pos[0] - a.pos[0]) * e,
-    a.pos[1] + (b.pos[1] - a.pos[1]) * e,
-    a.pos[2] + (b.pos[2] - a.pos[2]) * e,
-  );
-  const lx = a.look[0] + (b.look[0] - a.look[0]) * e;
-  const ly = a.look[1] + (b.look[1] - a.look[1]) * e;
-  const lz = a.look[2] + (b.look[2] - a.look[2]) * e;
-  camera.lookAt(lx, ly, lz);
-}
-
-const segments = [];
-let totalDuration = 0;
-for (let i = 1; i < FLYTHROUGH.length; i++) {
-  const dur = FLYTHROUGH[i].duration ?? 1;
-  segments.push({
-    from: FLYTHROUGH[i - 1],
-    to: FLYTHROUGH[i],
-    start: totalDuration,
-    end: totalDuration + dur,
-    ease: FLYTHROUGH[i].ease,
-  });
-  totalDuration += dur;
-}
-
-function updateFlythrough(elapsed) {
-  if (FLYTHROUGH.length === 0) return;
-  if (FLYTHROUGH.length === 1) {
-    applyWaypoint(FLYTHROUGH[0]);
-    return;
-  }
-
-  let t = elapsed;
-  if (LOOP_FLYTHROUGH) {
-    t = totalDuration > 0 ? elapsed % totalDuration : 0;
-  } else if (t >= totalDuration) {
-    applyWaypoint(FLYTHROUGH[FLYTHROUGH.length - 1]);
-    return;
-  }
-
-  for (const seg of segments) {
-    if (t <= seg.end) {
-      const local = (t - seg.start) / (seg.end - seg.start);
-      lerpWaypoint(seg.from, seg.to, local, seg.ease);
-      return;
-    }
-  }
-  applyWaypoint(FLYTHROUGH[FLYTHROUGH.length - 1]);
-}
-
-// --- Debug Free-Fly (authoring mode) ---
-// WASD/QE/Space/Shift to move; mouse-drag to look; press P to log a waypoint
-// with the current pose (paste into flythrough.js).
-const debug = {
-  enabled: DEBUG,
-  yaw: 0,
-  pitch: 0,
-  keys: {},
-  drag: { active: false, x: 0, y: 0 },
-  hud: null,
-};
-
-if (DEBUG) {
-  camera.position.set(0, 200, 400);
-  camera.lookAt(0, 0, 0);
-  debug.yaw = camera.rotation.y;
-  debug.pitch = camera.rotation.x;
-
-  debug.hud = document.createElement("div");
-  debug.hud.id = "debug-hud";
-  document.body.appendChild(debug.hud);
-
+if (!DEBUG) {
+  // Transport keys with a brief on-screen status that fades out, so
+  // recordings stay clean.
+  const toast = document.createElement("div");
+  toast.id = "transport-toast";
+  document.body.appendChild(toast);
+  let toastTimer;
   window.addEventListener("keydown", (e) => {
-    debug.keys[e.key.toLowerCase()] = true;
-    if (e.key === "p" || e.key === "P") logCurrentPose();
+    if (e.metaKey || e.ctrlKey) return;
+    const msg = transportKey(player, e.code);
+    if (!msg) return;
+    e.preventDefault();
+    toast.textContent = msg;
+    toast.classList.add("visible");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.remove("visible"), 1200);
   });
-  window.addEventListener("keyup", (e) => {
-    debug.keys[e.key.toLowerCase()] = false;
-  });
-
-  renderer.domElement.addEventListener("mousedown", (e) => {
-    debug.drag.active = true;
-    debug.drag.x = e.clientX;
-    debug.drag.y = e.clientY;
-  });
-  window.addEventListener("mouseup", () => (debug.drag.active = false));
-  window.addEventListener("mousemove", (e) => {
-    if (!debug.drag.active) return;
-    const dx = e.clientX - debug.drag.x;
-    const dy = e.clientY - debug.drag.y;
-    debug.yaw -= dx * 0.002;
-    debug.pitch -= dy * 0.002;
-    debug.pitch = Math.max(
-      -Math.PI / 2 + 0.1,
-      Math.min(Math.PI / 2 - 0.1, debug.pitch),
-    );
-    debug.drag.x = e.clientX;
-    debug.drag.y = e.clientY;
-  });
-}
-
-function logCurrentPose() {
-  const fwd = new THREE.Vector3();
-  camera.getWorldDirection(fwd);
-  const look = camera.position.clone().add(fwd.multiplyScalar(20));
-  const fmt = (n) => n.toFixed(1);
-  const wp = `  { pos: [${fmt(camera.position.x)}, ${fmt(camera.position.y)}, ${fmt(camera.position.z)}], look: [${fmt(look.x)}, ${fmt(look.y)}, ${fmt(look.z)}], duration: 3 },`;
-  console.log(wp);
-}
-
-function updateDebug(delta) {
-  const speed = (debug.keys["shift"] ? 200 : 60) * delta;
-  const fwd = new THREE.Vector3();
-  camera.getWorldDirection(fwd);
-  const right = new THREE.Vector3().crossVectors(fwd, camera.up).normalize();
-
-  if (debug.keys["w"]) camera.position.addScaledVector(fwd, speed);
-  if (debug.keys["s"]) camera.position.addScaledVector(fwd, -speed);
-  if (debug.keys["d"]) camera.position.addScaledVector(right, speed);
-  if (debug.keys["a"]) camera.position.addScaledVector(right, -speed);
-  if (debug.keys[" "]) camera.position.y += speed;
-  if (debug.keys["control"]) camera.position.y -= speed;
-  if (debug.keys["q"]) debug.yaw += 1.5 * delta;
-  if (debug.keys["e"]) debug.yaw -= 1.5 * delta;
-
-  camera.rotation.y = debug.yaw;
-  camera.rotation.x = debug.pitch;
-
-  const p = camera.position;
-  debug.hud.textContent =
-    `pos  [${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}]\n` +
-    `yaw  ${debug.yaw.toFixed(2)}  pitch ${debug.pitch.toFixed(2)}\n` +
-    `WASD move · Q/E yaw · Space/Ctrl up/down · Shift = fast\n` +
-    `P = log waypoint to console`;
 }
 
 // --- Animation Loop ---
@@ -419,10 +341,10 @@ function animate() {
   garbageMaterial.uniforms.uTime.value = elapsed;
   garbageEdgeMaterial.opacity = 0.5 + 0.5 * Math.sin(elapsed * 8.0);
 
-  if (DEBUG) {
-    updateDebug(delta);
+  if (debugMode) {
+    debugMode.update(delta);
   } else {
-    updateFlythrough(elapsed);
+    player.update(delta);
   }
 
   composer.render();

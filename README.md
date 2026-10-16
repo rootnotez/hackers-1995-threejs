@@ -31,18 +31,51 @@ Live at: <https://rootnotez.github.io/hackers-1995-threejs/>
 
 ## Authoring the flythrough
 
-Camera waypoints live in [`src/flythrough.js`](src/flythrough.js). Each entry is `{ pos: [x,y,z], look: [x,y,z], duration, ease? }`; `duration` is seconds spent traveling *from* the previous waypoint *to* this one.
+Camera waypoints live in [`src/flythrough.js`](src/flythrough.js). Each entry is `{ pos: [x,y,z], look: [x,y,z], duration, hold?, ease?, fov?, roll? }`; `duration` is seconds spent traveling *from* the previous waypoint *to* this one, and `hold` pauses on the waypoint after arriving. `SPLINE_FLYTHROUGH` switches between a smooth Catmull-Rom curve through all waypoints (default) and straight lines between them.
 
-To author waypoints interactively, open <http://localhost:8080/?debug> for a free-fly mode:
+### Playback controls
 
-- `WASD` — move
-- `Q` / `E` — yaw
-- `Space` / `Ctrl` — up / down
-- `Shift` — fast move
-- mouse-drag — look around
-- `P` — log a waypoint with the current pose to the browser console
+| Key | Action |
+|---|---|
+| `Space` | pause / play |
+| `←` / `→` | previous / next waypoint |
+| `[` / `]` | slower / faster |
+| `\` | reset speed to 1× |
+| `R` | restart |
 
-Paste logged waypoints into `src/flythrough.js`.
+URL parameters, combinable: `?speed=0.5`, `?start=3` (begin at waypoint 3), `?t=12.5` (begin 12.5 s in), `?paused`, `?loop=0`, `?spline=0`, `?seed=42` (deterministic city — same pillar colors, garbage column, and textures every load).
+
+### Debug authoring mode
+
+Open <http://localhost:8080/?debug>. It edits an in-memory copy of the waypoints, draws the path (cyan line, waypoint markers, orange look-direction stubs), and starts at waypoint 0.
+
+| Input | Action |
+|---|---|
+| `WASD` | move along the view direction |
+| `Space` / `Ctrl` | up / down |
+| `Q` / `E` | yaw |
+| mouse | look (click to lock the pointer, `Esc` to release) |
+| `Shift` | fast |
+| mouse wheel | base speed |
+| `Z` / `X` | roll |
+| `-` / `=` | field of view |
+| `0` | reset roll and FOV |
+| `,` / `.` | select previous / next waypoint |
+| `G` | jump camera to selected waypoint |
+| `N` | insert a waypoint at the current pose after the selected one |
+| `U` | update selected waypoint to the current pose (keeps duration, hold, ease) |
+| `Delete` / `Backspace` | delete selected waypoint |
+| `[` / `]` | selected waypoint's duration ±0.5 s |
+| `Shift+[` / `Shift+]` | selected waypoint's hold ±0.5 s |
+| `Enter` | preview the flythrough from the selected waypoint; `Enter` again returns to free-fly at the current pose. Playback keys work while previewing. |
+| `C` | copy the whole `FLYTHROUGH` array to the clipboard (also logged to the console) |
+| `P` | log just the current pose to the console |
+| `V` | toggle path overlay |
+| `H` | toggle help |
+
+A standard gamepad also works: left stick moves, right stick looks, `LT`/`RT` down/up, `LB`/`RB` roll, `L3` fast.
+
+Edits are lost on reload, so press `C` and paste over `FLYTHROUGH` in `src/flythrough.js` before refreshing. Comments in the array aren't preserved.
 
 ## Scene reference
 
